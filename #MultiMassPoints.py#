@@ -1,0 +1,692 @@
+qimport ROOT as r
+import os
+import collections
+from collections import Counter
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from matplotlib import cm
+r.gSystem.Load('libGenVector')
+
+#Define these details for the histogram
+MassPoints = [150,500,1000]
+CutName = ''
+DistributionVar = 'Delta R between truth photon and reco photon'
+BaseDirectory = '/net/cms17/cms17r0/pico/NanoAODv7/nano/2016/SMS-TChiHH_HToGG_fastSimJmeCorrection/'
+Units = 'Radians'
+NumBins = 100
+LowBin = 0
+UpBin = 1
+colors = [r.kRed , r.kBlue , r.kBlack, r.kGreen + 2, r.kOrange + 2, r.kYellow + 2 ]
+legend = r.TLegend(0.7,0.6,0.85,0.75)
+legendNameList = ['Higgsino Mass '  + str(mass) + ' GeV' for mass in MassPoints]
+ModelName = 'TChiHH Model'
+LSPMass = 'LSP Mass: 1 GeV'
+
+FilenameList = [BaseDirectory + 'SMS-TChiHH_mChi-' + str(mass) + '_mLSP-1_HToGG_TuneCUETP8M1_13TeV-madgraphMLM-pythia8__RunIISummer16NanoAODv7__PUSummer16v3Fast_Nano02Apr2020_102X_mcRun2_asymptotic_v8-v1.root' for mass in MassPoints]
+if Units != '': 
+    if len(CutName)==0: HistogramTitle = DistributionVar + ' distribution (No cut)' + ';' + DistributionVar + ' [' + Units + '];' + 'Entries'
+    else: HistogramTitle = DistributionVar + ' distribution for ' + CutName + ';' + DistributionVar + ' [' + Units + '];' + 'Entries'
+else: 
+    if len(CutName)==0: HistogramTitle = DistributionVar + ' distribution (No cut)' + ';' + DistributionVar + ' ;' + 'Entries'
+    else: HistogramTitle = DistributionVar + ' distribution for ' + CutName + ';' + DistributionVar + ' ;' + 'Entries'
+HistogramsList = [r.TH1D(DistributionVar,   HistogramTitle, NumBins, LowBin, UpBin) for i in range(len(FilenameList))]
+InFileList = [r.TFile.Open(Filename ,'READ') for Filename in FilenameList]
+TreeList = [InFile.Get('Events') for InFile in InFileList]
+HistogramsList2D = [r.TH2D('DeltaR_pt','Inv_DR;   Invariant Mass [GeV];   Delta R [Radians]',300,120,126,300,0,5) for i in range(len(FilenameList))]
+#600,-50,50,100,0,0.1
+HiggsDecayDict = {
+
+    "GG" : [[22,22],0, 0.1], 
+    "BB": [[5,-5],0, 0],
+    "WW"      : [[24,-24],0, 0],
+    "Tau Tau"    : [[15,-15],0, 0],
+    "ZZ"      : [[23,23],0,0],
+    "GlGl"  : [[21,21],0, 0],
+    "ZG"      : [[23,22],0, 0],
+    "CC"      : [[4,-4],0, 0],
+    "SS"      : [[3,-3],0, 0],
+    "Mu Mu"      : [[13,-13],0,0],
+    "No trace" : [[],0,0]
+}
+
+
+def indices(lst, item):
+    return [i for i, x in enumerate(lst) if x == item]
+
+def TruthPhotonList(event):
+    TruthPhotonList = []
+    MotherIndexList = []
+    TruthPhotonHGGList = [] 
+    NumTruthPhotons = 0
+    
+    for i in range(len(event.GenPart_pdgId)):
+        MotherIDindex = event.GenPart_genPartIdxMother[i]
+        if event.GenPart_pdgId[i] == 22 and MotherIDindex != -1 and event.GenPart_pdgId[event.GenPart_genPartIdxMother[i]] == 25:
+            TruthPhoton = r.Math.PtEtaPhiMVector()
+            TruthPhoton.SetCoordinates(event.GenPart_pt[i],event.GenPart_eta[i],event.GenPart_phi[i],0)
+            TruthPhotonList.append(TruthPhoton)
+            MotherIndexList.append(event.GenPart_genPartIdxMother[i])
+            NumTruthPhotons = NumTruthPhotons + 1
+    
+    if NumTruthPhotons == 2 and len(Counter(MotherIndexList).keys()) == 1: 
+        TruthPhotonHGGList = TruthPhotonList
+    elif NumTruthPhotons == 3:
+        for items, counts in Counter(MotherIndexList).items():
+            if counts == 2:
+                MotherIndexRepeatedTwice = items
+                TruthPhotonsIndicesToGrab = indices(MotherIndexList, MotherIndexRepeatedTwice)
+                for index in TruthPhotonsIndicesToGrab: TruthPhotonHGGList.append(TruthPhotonList[index])
+    elif NumTruthPhotons == 4: 
+        TruthPhotonHGGList = TruthPhotonList
+
+    return TruthPhotonHGGList
+
+def PhotonTagger(TruthPhotonList,RecoPhotonList, DeltaRcut, event):
+    TaggedPhotonHGGList = []
+    DeltaRList = [[],[],[],[]] # Max 4 truth Photons per event. One list for delta R with reco photons for each.
+    DeltaRTaggedPhoton =[]
+    IndexOfRecoPhotonList = []
+    TruthPhotonTaggedTo = []
+
+    if TruthPhotonList == [] or RecoPhotonList == []: 
+    
+        TaggedPhotonHGGList = []
+    
+    else:
+        for i in range(len(TruthPhotonList)):
+            
+            for j in range(len(RecoPhotonList)):           
+                
+                if RecoPhotonList[j].Pt() >= 20:
+
+                    DeltaR = r.Math.VectorUtil.DeltaR(RecoPhotonList[j],TruthPhotonList[i])
+                    DeltaRList[i].append(DeltaR)
+
+            if DeltaRList[i] != []:
+                IndexOfRecoPhoton = DeltaRList[i].index(min(DeltaRList[i])) 
+                DeltaRTaggedPhoton.append(min(DeltaRList[i]))
+                IndexOfRecoPhotonList.append(IndexOfRecoPhoton)
+
+        if len(RecoPhotonList) == 1:
+           if DeltaRTaggedPhoton != []:
+               DR = min(DeltaRTaggedPhoton)
+               DeltaRTaggedPhoton =[]
+               DeltaRTaggedPhoton.append(DR)
+
+        for i in range(len(DeltaRTaggedPhoton)):
+            if DeltaRTaggedPhoton[i] <= DeltaRcut: 
+                TaggedPhotonHGGList.append(RecoPhotonList[IndexOfRecoPhotonList[i]])
+                TruthPhotonTaggedTo.append(TruthPhotonList[i])
+    
+    return TaggedPhotonHGGList, TruthPhotonTaggedTo
+
+def PhotonTaggerv2(TruthPhotonList,RecoPhotonList, DeltaRcut, event):
+    TaggedPhotonHGGList = []
+    DeltaRList = [[],[],[],[]] # Max 4 truth Photons per event. One list for delta R with reco photons for each.
+    TruthPhotonTaggedTo = []
+
+    if TruthPhotonList == [] or RecoPhotonList == []: 
+    
+        TaggedPhotonHGGList = []
+    
+    else:
+
+        for i in range(len(TruthPhotonList)):
+            
+            PossibleCandidates = [[],[],[],[]]
+            PtDiffList = []
+            for j in range(len(RecoPhotonList)):           
+                
+                if RecoPhotonList[j].Pt() >= 20:
+
+                    DeltaR = r.Math.VectorUtil.DeltaR(RecoPhotonList[j],TruthPhotonList[i])
+                    DeltaRList[i].append(DeltaR)
+
+            for p in range(len(DeltaRList[i])):
+                if DeltaRList[i][p] < DeltaRcut: 
+                    PossibleCandidates[0].append(p)
+                    PossibleCandidates[1].append(RecoPhotonList[p])
+                    PossibleCandidates[2].append(RecoPhotonList[p].Pt())
+                    PossibleCandidates[3].append(DeltaRList[i][p])
+            
+            if len(PossibleCandidates[0]) > 1:
+
+                for q in range(len(PossibleCandidates[2])): PtDiffList.append(abs(TruthPhotonList[i].Pt() - PossibleCandidates[2][q]))
+                IndexReco = PossibleCandidates[0][PtDiffList.index(min(PtDiffList))]
+                TaggedPhotonHGGList.append(RecoPhotonList[IndexReco])
+                TruthPhotonTaggedTo.append(TruthPhotonList[i]) 
+            
+            elif len(PossibleCandidates[0]) == 1:
+                TaggedPhotonHGGList.append(RecoPhotonList[PossibleCandidates[0][0]])
+                TruthPhotonTaggedTo.append(TruthPhotonList[i])            
+    
+    return TaggedPhotonHGGList, TruthPhotonTaggedTo
+
+
+def PhotonTaggerv3(TruthPhotonList,RecoPhotonList, DeltaRcut, event):
+    TaggedPhotonHGGList = []
+    DeltaRList = [[],[],[],[]] # Max 4 truth Photons per event. One list for delta R with reco photons for each.
+    TruthPhotonTaggedTo = []
+
+    if TruthPhotonList == [] or RecoPhotonList == []: 
+    
+        TaggedPhotonHGGList = []
+    
+    else:
+
+        for i in range(len(TruthPhotonList)):
+            
+            PossibleCandidates = [[],[],[],[]]
+            PtDiffList = []
+            for j in range(len(RecoPhotonList)):           
+                
+                if RecoPhotonList[j].Pt() >= 20:
+
+                    DeltaR = r.Math.VectorUtil.DeltaR(RecoPhotonList[j],TruthPhotonList[i])
+                    DeltaRList[i].append(DeltaR)
+
+            for p in range(len(DeltaRList[i])):
+                if DeltaRList[i][p] < DeltaRcut: 
+                    PossibleCandidates[0].append(p)
+                    PossibleCandidates[1].append(RecoPhotonList[p])
+                    PossibleCandidates[2].append(RecoPhotonList[p].Pt())
+                    PossibleCandidates[3].append(DeltaRList[i][p])
+            
+            if len(PossibleCandidates[0]) > 1:
+
+                for q in range(len(PossibleCandidates[2])): PtDiffList.append(abs(TruthPhotonList[i].Pt() - PossibleCandidates[2][q]))
+                if abs(min(PtDiffList)) <= 15:
+                    IndexReco = PossibleCandidates[0][PtDiffList.index(min(PtDiffList))]
+                    TaggedPhotonHGGList.append(RecoPhotonList[IndexReco])
+                    TruthPhotonTaggedTo.append(TruthPhotonList[i]) 
+            
+            elif len(PossibleCandidates[0]) == 1:
+                if abs(RecoPhotonList[PossibleCandidates[0][0]].Pt() - TruthPhotonList[i].Pt()) <= 15:
+                    TaggedPhotonHGGList.append(RecoPhotonList[PossibleCandidates[0][0]])
+                    TruthPhotonTaggedTo.append(TruthPhotonList[i])            
+    
+    return TaggedPhotonHGGList, TruthPhotonTaggedTo
+
+
+
+def DeltaRList(List1,List2):
+    DeltaRList = []
+    
+    for i in range(len(List2)):
+        
+        for j in range(len(List1)):
+            
+            DeltaR = r.Math.VectorUtil.DeltaR(List2[i],List1[j])      
+            DeltaRList.append(DeltaR)
+
+    return DeltaRList
+
+########### Change Branch name ##############
+def BareHistograms(TreeList):
+
+    for tree in TreeList:
+        for event in tree: 
+            Branch = event.nJet
+    #        for Num in Branch: HistogramsList[TreeList.index(tree)].Fill(Num)
+            HistogramsList[TreeList.index(tree)].Fill(Branch)
+    return HistogramsList
+
+########### Change Branch name ##############
+def TaggedPhotonHistogram(TreeList, DeltaRcut):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+            
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+
+            #TruthPhotonHGGList = TruthPhotonList(event)       
+            #TaggedPhotonHGGList, TruthPhotonTaggedTo = PhotonTaggerv2(TruthPhotonHGGList, RecoPhotonList, DeltaRcut, event)
+
+            for ph in RecoPhotonList: HistogramsList[TreeList.index(tree)].Fill(ph.Pt())
+            '''for i in range(len(TruthPhotonTaggedTo)):
+                PtDiff = TruthPhotonTaggedTo[i].Pt() - TaggedPhotonHGGList[i].Pt()
+                HistogramsList[TreeList.index(tree)].Fill(PtDiff)'''
+            #HistogramsList[TreeList.index(tree)].Fill(len(TruthPhotonHGGList))
+            
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList
+
+
+def PtDiffHistogram(TreeList):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+            
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+
+            TruthPhotonHGGList = TruthPhotonList(event) 
+
+            if TruthPhotonList != []: 
+
+                for i in range(len(TruthPhotonHGGList)):
+                    
+                    for j in range(len(RecoPhotonList)):   
+
+                        PtDiff = TruthPhotonHGGList[i].Pt() - RecoPhotonList[j].Pt()
+                        HistogramsList[TreeList.index(tree)].Fill(PtDiff)
+            
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList
+
+
+def DeltaRHist(TreeList):
+    eventCounter = 0
+    for tree in TreeList:
+        
+        for event in tree:
+            
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+            
+            TruthPhotonHGGList = TruthPhotonList(event) 
+            DeltaR = DeltaRList(TruthPhotonHGGList,RecoPhotonList)
+            
+            for DR in DeltaR: HistogramsList[TreeList.index(tree)].Fill(DR)
+            eventCounter += 1
+            if eventCounter == 2000: break
+    return HistogramsList
+
+
+def HiggsPeakHistogram(TreeList, DeltaRcut):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+
+            TruthPhotonHGGList = TruthPhotonList(event)       
+            TaggedPhotonHGGList, TruthPhotonTaggedTo = PhotonTaggerv2(TruthPhotonHGGList, RecoPhotonList, DeltaRcut, event)
+
+            if len(TruthPhotonHGGList) == 2:
+                InvariantMass = (TruthPhotonHGGList[0] + TruthPhotonHGGList[1]).M()
+                HistogramsList[TreeList.index(tree)].Fill(InvariantMass)
+            
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList
+
+
+
+def DeltaRP2DHist(TreeList, DeltaRcut):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+
+            TruthPhotonHGGList = TruthPhotonList(event)       
+            TaggedPhotonHGGList, TruthPhotonTaggedTo = PhotonTaggerv2(TruthPhotonHGGList, RecoPhotonList, DeltaRcut, event)
+
+            if len(TaggedPhotonHGGList) == 2:
+                H = TaggedPhotonHGGList[0] + TaggedPhotonHGGList[1]
+                R = r.Math.VectorUtil.DeltaR(TaggedPhotonHGGList[0],TaggedPhotonHGGList[1])
+                HiggsPt = H.Pt() 
+                HistogramsList2D[TreeList.index(tree)].Fill(HiggsPt,R)
+            
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList2D
+
+def DeltaVsPtdiff2DHist(TreeList, DeltaRcut):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+
+            TruthPhotonHGGList = TruthPhotonList(event)       
+            TaggedPhotonHGGList, TruthPhotonTaggedTo = PhotonTaggerv3(TruthPhotonHGGList, RecoPhotonList, DeltaRcut, event)
+
+            if len(TaggedPhotonHGGList) == 2:
+                for i in range(len(TaggedPhotonHGGList)):
+                    PtDiff = TaggedPhotonHGGList[i].Pt() - TruthPhotonTaggedTo[i].Pt()
+                    R = r.Math.VectorUtil.DeltaR(TaggedPhotonHGGList[i],TruthPhotonTaggedTo[i])
+                    HistogramsList2D[TreeList.index(tree)].Fill(PtDiff,R)
+            
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList2D
+
+def DeltaVsPtdiffReco2DHist(TreeList):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoPhotonList = []
+            
+            for i in range(len(event.Photon_pt)):
+                RecoPhoton = r.Math.PtEtaPhiMVector()
+                RecoPhoton.SetCoordinates(event.Photon_pt[i],event.Photon_eta[i],event.Photon_phi[i],0)
+                RecoPhotonList.append(RecoPhoton)
+
+            TruthPhotonHGGList = TruthPhotonList(event)       
+
+            for i in range(len(TruthPhotonHGGList)):
+                for j in range(len(RecoPhotonList)):
+                    PtDiff = TruthPhotonHGGList[i].Pt() - RecoPhotonList[j].Pt()
+                    R = r.Math.VectorUtil.DeltaR(TruthPhotonHGGList[i],RecoPhotonList[j])
+                    HistogramsList2D[TreeList.index(tree)].Fill(PtDiff,R)
+            
+            eventCounter += 1
+            
+            if eventCounter == 5000: break
+
+    return HistogramsList2D
+
+
+def DeltaRBTag(TreeList):
+
+    eventCounter = 0
+    for tree in TreeList:
+        
+        for event in tree:
+            
+            RecoJetList = []
+            
+            for i in range(len(event.Jet_pt)):
+                if event.Jet_btagDeepFlavB[i] >= 0.6321:
+                    RecoJet = r.Math.PtEtaPhiMVector()
+                    RecoJet.SetCoordinates(event.Jet_pt[i],event.Jet_eta[i],event.Jet_phi[i],event.Jet_mass[i])
+                    RecoJetList.append(RecoJet)
+            
+            TruthBHBBList = TruthBJets(event) 
+            DeltaR = DeltaRList(TruthBHBBList,RecoJetList)
+            
+            for DR in DeltaR: HistogramsList[TreeList.index(tree)].Fill(DR)
+            eventCounter += 1
+            if eventCounter == 5000: break
+    return HistogramsList
+
+
+def TruthBJets(event):
+    TruthBList = []
+    MotherIndexList = []
+    TruthBHBBList = [] 
+    NumTruthB = 0
+    l =[]
+    for i in range(len(event.GenPart_pdgId)):
+        MotherIDindex = event.GenPart_genPartIdxMother[i]
+        B = event.GenPart_pdgId[i] == 5 and MotherIDindex != -1 and event.GenPart_pdgId[event.GenPart_genPartIdxMother[i]] == 25
+        AntiB = event.GenPart_pdgId[i] == -5 and MotherIDindex != -1 and event.GenPart_pdgId[event.GenPart_genPartIdxMother[i]] == 25
+        if B or AntiB:
+            TruthB = r.Math.PtEtaPhiMVector()
+            TruthB.SetCoordinates(event.GenPart_pt[i],event.GenPart_eta[i],event.GenPart_phi[i],event.GenPart_mass[i])
+            TruthBList.append(TruthB)
+            MotherIndexList.append(event.GenPart_genPartIdxMother[i])
+            NumTruthB = NumTruthB + 1
+            l.append(event.GenPart_pdgId[i])
+    if NumTruthB == 2 and len(Counter(MotherIndexList).keys()) == 1:
+        TruthBHBBList = TruthBList
+    return TruthBHBBList
+
+
+def BTagger(TruthBList,RecoBList, DeltaRcut, event):
+    TaggedBHBBList = []
+    DeltaRList = [[],[],[],[]] # Max 4 truth Bs per event. One list for delta R with reco Bs for each.
+    TruthBTaggedTo = []
+
+    if TruthBList == [] or RecoBList == []: 
+    
+        TaggedBHBBList = []
+    
+    else:
+
+        for i in range(len(TruthBList)):
+            
+            PossibleCandidates = [[],[],[],[]]
+            PtDiffList = []
+            for j in range(len(RecoBList)):
+
+                    DeltaR = r.Math.VectorUtil.DeltaR(RecoBList[j],TruthBList[i])
+                    DeltaRList[i].append(DeltaR)
+
+            for p in range(len(DeltaRList[i])):
+                if DeltaRList[i][p] < DeltaRcut: 
+                    PossibleCandidates[0].append(p)
+                    PossibleCandidates[1].append(RecoBList[p])
+                    PossibleCandidates[2].append(RecoBList[p].Pt())
+                    PossibleCandidates[3].append(DeltaRList[i][p])
+            
+            if len(PossibleCandidates[0]) > 1:
+
+                for q in range(len(PossibleCandidates[2])): PtDiffList.append(abs(TruthBList[i].Pt() - PossibleCandidates[2][q]))
+                IndexReco = PossibleCandidates[0][PtDiffList.index(min(PtDiffList))]
+                TaggedBHBBList.append(RecoBList[IndexReco])
+                TruthBTaggedTo.append(TruthBList[i]) 
+
+            elif len(PossibleCandidates[0]) == 1:
+                TaggedBHBBList.append(RecoBList[PossibleCandidates[0][0]])
+                TruthBTaggedTo.append(TruthBList[i])            
+    
+    return TaggedBHBBList, TruthBTaggedTo
+
+def DeltaVsPtdiffJet2DHist(TreeList, DeltaRcut):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoJetList = []
+            
+            for i in range(len(event.Jet_pt)):
+                if event.Jet_btagDeepFlavB[i] >= 0.6321:
+                    RecoJet = r.Math.PtEtaPhiMVector()
+                    RecoJet.SetCoordinates(event.Jet_pt[i],event.Jet_eta[i],event.Jet_phi[i],event.Jet_mass[i])
+                    RecoJetList.append(RecoJet)
+
+            TruthJetHBBList = TruthBJets(event)       
+            TaggedJetHBBList, TruthJetTaggedTo = BTagger(TruthJetHBBList, RecoJetList, DeltaRcut, event)
+
+            if len(TaggedJetHBBList) == 2:
+                for i in range(len(TaggedJetHBBList)):
+                    PtDiff = TaggedJetHBBList[i].Pt() - TruthJetTaggedTo[i].Pt()
+                    R = r.Math.VectorUtil.DeltaR(TaggedJetHBBList[i],TruthJetTaggedTo[i])
+                    HistogramsList2D[TreeList.index(tree)].Fill(PtDiff,R)
+            
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList2D
+
+
+
+def HiggsPeakJetHistogram(TreeList, DeltaRcut):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoJetList = []
+            
+            for i in range(len(event.Jet_pt)):
+                if event.Jet_btagDeepFlavB[i] >= 0.6321:
+                    RecoJet = r.Math.PtEtaPhiMVector()
+                    RecoJet.SetCoordinates(event.Jet_pt[i],event.Jet_eta[i],event.Jet_phi[i],event.Jet_mass[i])
+                    RecoJetList.append(RecoJet)
+                    #HistogramsList[TreeList.index(tree)].Fill(RecoJet.Pt())
+
+            TruthBHBBList = TruthBJets(event)    
+            #TaggedBHBBList, TruthBTaggedTo = BTagger(TruthBHBBList, RecoJetList, DeltaRcut, event)
+
+            if len(TruthBHBBList) == 2:
+                #InvariantMass = (TaggedBHBBList[0] + TaggedBHBBList[1]).M()
+                #DeltaR = r.Math.VectorUtil.DeltaR(TruthBHBBList[0],TruthBHBBList[1])
+                #HistogramsList2D[TreeList.index(tree)].Fill(InvariantMass,DeltaR)
+                HistogramsList[TreeList.index(tree)].Fill(TruthBHBBList[0].Pt())
+                HistogramsList[TreeList.index(tree)].Fill(TruthBHBBList[1].Pt())
+            eventCounter += 1
+            
+            if eventCounter == 50000: break
+
+    return HistogramsList
+
+
+
+
+def PtDiffHistogram(TreeList):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+            
+            RecoJetList = []
+            
+            for i in range(len(event.Jet_pt)):
+                if event.Jet_btagDeepFlavB[i] >= 0.6321:
+                    RecoJet = r.Math.PtEtaPhiMVector()
+                    RecoJet.SetCoordinates(event.Jet_pt[i],event.Jet_eta[i],event.Jet_phi[i],event.Jet_mass[i])
+                    RecoJetList.append(RecoJet)
+
+            TruthBHBBList = TruthBJets(event) 
+
+            if TruthBHBBList != []: 
+
+                for i in range(len(TruthBHBBList)):
+                    
+                    for j in range(len(RecoJetList)):   
+
+                        PtDiff = TruthBHBBList[i].Pt() - RecoJetList[j].Pt()
+                        HistogramsList[TreeList.index(tree)].Fill(PtDiff)
+            
+            eventCounter += 1
+            
+            if eventCounter == 5000: break
+
+    return HistogramsList
+
+
+def DeltaRP2DHist(TreeList):
+
+    for tree in TreeList:
+        eventCounter = 0        
+        for event in tree:
+
+            RecoJetList = []
+            
+            for i in range(len(event.Jet_pt)):
+                if event.Jet_btagDeepFlavB[i] >= 0.6321:
+                    RecoJet = r.Math.PtEtaPhiMVector()
+                    RecoJet.SetCoordinates(event.Jet_pt[i],event.Jet_eta[i],event.Jet_phi[i],event.Jet_mass[i])
+                    RecoJetList.append(RecoJet)
+
+            TruthBHBBList = TruthBJets(event)  
+
+            if len(TruthBHBBList) == 2:
+                H = TruthBHBBList[0] + TruthBHBBList[1]
+                R = r.Math.VectorUtil.DeltaR(TruthBHBBList[0],TruthBHBBList[1])
+                HiggsPt = H.Pt() 
+                HistogramsList2D[TreeList.index(tree)].Fill(HiggsPt,R)
+            
+            eventCounter += 1
+            
+            if eventCounter == 5000: break
+
+    return HistogramsList2D
+
+
+
+
+
+
+
+
+HistogramsList = DeltaRHist(TreeList)
+#HistogramsList = TaggedPhotonHistogram(TreeList, 0.1)
+#HistogramsList = PtDiffHistogram(TreeList)
+#HistogramsList = HiggsPeakHistogram(TreeList, 0.1)
+#HistogramsList = DeltaVsPtdiff2DHist(TreeList, 0.1)
+#HistogramsList = DeltaVsPtdiffJet2DHist(TreeList,0.4)
+#HistogramsList = DeltaRBTag(TreeList)
+#HistogramsList = HiggsPeakJetHistogram(TreeList, 0.1)
+#HistogramsList = DeltaRP2DHist(TreeList)
+
+
+#Drawing the Histograms
+
+ths1 = r.THStack(DistributionVar,   HistogramTitle)
+for m in range(len(HistogramsList)):
+    HistogramsList[m].SetLineColor(colors[m])
+    HistogramsList[m].SetLineWidth(2)
+    HistogramsList[m].SetStats(0)
+    legend.AddEntry(HistogramsList[m], legendNameList[m])
+    ths1.Add(HistogramsList[m])
+    '''
+    if m==0:
+        HistogramsList[m].Draw("colz")
+    else: 
+        HistogramsList[m].Draw("SAME")
+    r.gPad.Update()'''
+
+
+ths1.Draw("nostack")
+r.gPad.Update()
+
+#Drawing the Legend
+legend.SetLineWidth(0)
+legend.SetTextSize(0.03)
+legend.SetTextAlign(12)
+legend.Draw("SAME")
+
+latex = r.TLatex()
+latex.SetNDC()
+latex.SetTextSize(0.04) 
+latex.DrawText(0.7,0.83, ModelName) 
+latex.SetTextSize(0.03) 
+latex.DrawText(0.7,0.77, LSPMass)
+
+raw_input('Please press enter to continue.')
+
